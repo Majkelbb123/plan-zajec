@@ -155,7 +155,16 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); o
   padding: 4px 6px; display: flex; flex-direction: column; gap: 1px;
   box-shadow: 0 0 0 1px var(--surface);
 }
-.card:hover { z-index: 4; overflow: visible; height: auto !important; min-height: var(--h); box-shadow: 0 4px 14px rgb(0 0 0 / 0.18); }
+/* Rozwinięcie pełnego opisu: najechanie myszką (komputer) albo dotknięcie (telefon) */
+@media (hover: hover) {
+  .card:hover { z-index: 4; overflow: visible; height: auto !important; min-height: var(--h); box-shadow: 0 4px 14px rgb(0 0 0 / 0.18); }
+}
+.card.open { z-index: 4; overflow: visible; height: auto !important; min-height: var(--h); box-shadow: 0 4px 14px rgb(0 0 0 / 0.18); }
+.card { cursor: pointer; }
+.free { position: absolute; inset: 24px 8px auto; text-align: center; color: var(--muted); font-size: 0.85rem; }
+
+/* Zakładki dni — widoczne tylko na telefonie */
+.day-tabs { display: none; }
 .card.cwA { --c: var(--cwA); --cb: var(--cwA-bg); }
 .card.cwL { --c: var(--cwL); --cb: var(--cwL-bg); }
 .card.cwK { --c: var(--cwK); --cb: var(--cwK-bg); }
@@ -166,7 +175,6 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); o
 .subj { font-weight: 600; font-size: 0.78rem; line-height: 1.25; overflow-wrap: anywhere; }
 .prof { font-size: 0.7rem; color: var(--muted); }
 .room { font-family: var(--f-mono); font-size: 0.7rem; color: var(--ink); }
-.room::before { content: "⌖ "; color: var(--muted); }
 .tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
 .tag {
   font-size: 0.62rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
@@ -180,11 +188,36 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); o
 @media (max-width: 900px) {
   .legend { display: none; }
 }
-@media (max-width: 520px) {
-  .bar .wrap { gap: 10px 14px; }
+/* ── Telefon: jeden dzień na ekranie ── */
+@media (max-width: 700px) {
+  header { padding-block: 14px 10px; }
+  h1 { font-size: 1.15rem; }
+  .meta { font-size: 0.68rem; }
+  .bar .wrap { gap: 8px 10px; padding-block: 8px; }
   .week { width: 100%; justify-content: space-between; }
+  .week button { width: 40px; height: 40px; }
   .field { flex: 1 1 40%; }
-  select { min-width: 0; width: 100%; }
+  .field label { font-size: 0.62rem; }
+  select { min-width: 0; width: 100%; padding: 8px; font-size: 0.95rem; }
+
+  .day-tabs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; width: 100%; }
+  .day-tabs button {
+    font: inherit; color: var(--ink); background: var(--bg); cursor: pointer;
+    border: 1px solid var(--line); border-radius: 8px; padding: 5px 0 4px;
+    display: flex; flex-direction: column; align-items: center; line-height: 1.15;
+  }
+  .day-tabs b { font-size: 0.82rem; }
+  .day-tabs span { font-family: var(--f-mono); font-size: 0.66rem; color: var(--muted); }
+  .day-tabs .is-today { border-color: var(--today-line); background: var(--today); }
+  .day-tabs [aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+  .day-tabs [aria-pressed="true"] span { color: var(--surface); }
+
+  .sched-scroll { margin-block: 10px 32px; overflow-x: visible; }
+  .sched { --hour: 68px; min-width: 0; grid-template-columns: 42px minmax(0, 1fr); }
+  .times div { right: 5px; font-size: 0.66rem; }
+  .subj { font-size: 0.86rem; }
+  .time, .room, .prof { font-size: 0.74rem; }
+  .hint { font-size: 0.72rem; }
 }
 </style>
 
@@ -223,12 +256,13 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); o
       <span><i style="background:var(--cwK)"></i>Ćw. komp.</span>
       <span><i style="background:var(--lang)"></i>Język</span>
     </div>
+    <div id="dayTabs" class="day-tabs" aria-label="Dzień tygodnia"></div>
   </div>
 </div>
 
 <main class="wrap">
   <div id="note" class="note" hidden></div>
-  <div id="hint" class="hint" hidden>Wybierz swoje grupy u góry — bez filtra zajęcia wszystkich grup tłoczą się obok siebie.</div>
+  <div id="hint" class="hint" hidden>Wybierz swoje grupy u góry. Bez filtra zajęcia wszystkich grup tłoczą się obok siebie.</div>
   <div class="sched-scroll"><div id="sched" class="sched"></div></div>
 </main>
 
@@ -266,6 +300,25 @@ const selLab = document.getElementById('selLab');
 selAudyt.value = load('plan-audyt');
 selLab.value = load('plan-lab');
 let week = currentWeekIndex();
+
+// Telefon = wąski ekran -> pokazujemy jeden dzień
+const mobile = window.matchMedia('(max-width: 700px)');
+const SHORT = ['Pn', 'Wt', 'Śr', 'Cz', 'Pt'];
+
+// Domyślny dzień: dzisiejszy, jeśli oglądamy bieżący tydzień, inaczej poniedziałek
+function defaultDay() {
+  const i = WEEKS[week].dni.indexOf(todayIso());
+  return i === -1 ? 0 : i;
+}
+let day = defaultDay();
+
+// Przejście o dzień do przodu/tyłu (z piątku na poniedziałek następnego tygodnia)
+function shiftDay(step) {
+  day += step;
+  if (day > 4) { if (week < WEEKS.length - 1) { week++; day = 0; } else day = 4; }
+  if (day < 0) { if (week > 0) { week--; day = 4; } else day = 0; }
+  render();
+}
 
 function visible(z) {
   if (z.gtyp === 'audyt') return !selAudyt.value || z.gval === selAudyt.value;
@@ -330,6 +383,11 @@ function render() {
   note.hidden = !w.uwaga;
   note.textContent = w.uwaga;
 
+  // Zakładki dni (CSS pokazuje je tylko na telefonie)
+  document.getElementById('dayTabs').innerHTML = SHORT.map((s, d) =>
+    `<button type="button" data-day="${d}" aria-pressed="${d === day}" class="${w.dni[d] === t ? 'is-today' : ''}">` +
+    `<b>${s}</b><span>${ddmm(w.dni[d])}</span></button>`).join('');
+
   const list = w.zajecia.filter(visible).map(z => ({ ...z }));
   const box = document.getElementById('sched');
   document.getElementById('hint').hidden = !!(selAudyt.value && selLab.value) || !list.length;
@@ -347,17 +405,20 @@ function render() {
     labels += `<div style="top:${(m - startMin) / 60 * hourPx}px">${m / 60}:00</div>`;
   }
 
-  let html = '<div class="corner"></div>' + DAYS.map((name, d) =>
+  // Na telefonie jeden dzień (bez nagłówków — zastępują je zakładki), na komputerze cały tydzień
+  const shown = mobile.matches ? [day] : [0, 1, 2, 3, 4];
+  let html = mobile.matches ? '' : '<div class="corner"></div>' + DAYS.map((name, d) =>
     `<div class="day-head${w.dni[d] === t ? ' is-today' : ''}"><b>${name}</b><span>${ddmm(w.dni[d])}</span></div>`).join('');
   html += `<div class="times" style="height:${height}px">${labels}</div>`;
-  html += DAYS.map((name, d) => {
+  html += shown.map(d => {
     const isToday = w.dni[d] === t;
     const items = list.filter(z => z.dzien === d).sort((a, b) => minutes(a.od) - minutes(b.od) || minutes(b.do) - minutes(a.do));
     assignLanes(items);
     const now = nowMinutes();
     const line = isToday && now >= startMin && now <= endMin
       ? `<div class="now-line" style="top:${(now - startMin) / 60 * hourPx}px"></div>` : '';
-    return `<div class="col${isToday ? ' is-today' : ''}" style="height:${height}px">${line}${items.map(z => card(z, isToday, startMin, hourPx)).join('')}</div>`;
+    const free = items.length ? '' : '<div class="free">Brak zajęć</div>';
+    return `<div class="col${isToday ? ' is-today' : ''}" style="height:${height}px">${line}${free}${items.map(z => card(z, isToday, startMin, hourPx)).join('')}</div>`;
   }).join('');
   box.innerHTML = html;
 }
@@ -365,9 +426,38 @@ function render() {
 // Co minutę odśwież (przesuwa linię "teraz" i znacznik "Trwa teraz")
 setInterval(render, 60000);
 
-document.getElementById('prev').addEventListener('click', () => { week--; render(); });
-document.getElementById('next').addEventListener('click', () => { week++; render(); });
-document.getElementById('todayBtn').addEventListener('click', () => { week = currentWeekIndex(); render(); });
+document.getElementById('prev').addEventListener('click', () => { week--; day = defaultDay(); render(); });
+document.getElementById('next').addEventListener('click', () => { week++; day = defaultDay(); render(); });
+document.getElementById('todayBtn').addEventListener('click', () => { week = currentWeekIndex(); day = defaultDay(); render(); });
+
+// Kliknięcie zakładki dnia
+document.getElementById('dayTabs').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (b) { day = Number(b.dataset.day); render(); }
+});
+
+// Dotknięcie bloku zajęć rozwija / zwija pełny opis
+document.getElementById('sched').addEventListener('click', e => {
+  const c = e.target.closest('.card');
+  if (!c) return;
+  document.querySelectorAll('.card.open').forEach(o => { if (o !== c) o.classList.remove('open'); });
+  c.classList.toggle('open');
+});
+
+// Przesunięcie palcem w lewo / prawo zmienia dzień (tylko telefon)
+let touchX = null, touchY = null;
+const area = document.querySelector('.sched-scroll');
+area.addEventListener('touchstart', e => { touchX = e.touches[0].clientX; touchY = e.touches[0].clientY; }, { passive: true });
+area.addEventListener('touchend', e => {
+  if (touchX === null || !mobile.matches) return;
+  const dx = e.changedTouches[0].clientX - touchX;
+  const dy = e.changedTouches[0].clientY - touchY;
+  touchX = null;
+  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) shiftDay(dx < 0 ? 1 : -1);
+}, { passive: true });
+
+// Obrót telefonu / zmiana szerokości okna -> przełącz widok
+mobile.addEventListener('change', render);
 selAudyt.addEventListener('change', () => { save('plan-audyt', selAudyt.value); render(); });
 selLab.addEventListener('change', () => { save('plan-lab', selLab.value); render(); });
 render();
